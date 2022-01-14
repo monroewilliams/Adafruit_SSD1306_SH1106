@@ -164,19 +164,22 @@
             because other devices on the I2C bus might not be compatible
             with the faster rate. (Ignored if using pre-1.5.7 Arduino
             software, which operates I2C at a fixed 100 KHz.)
+    @param  isSH1106
+            The device is actually the clone SH1106,.
     @return Adafruit_SSD1306 object.
     @note   Call the object's begin() function before use -- buffer
             allocation is performed there!
 */
 Adafruit_SSD1306::Adafruit_SSD1306(uint8_t w, uint8_t h, TwoWire *twi,
                                    int8_t rst_pin, uint32_t clkDuring,
-                                   uint32_t clkAfter)
+                                   uint32_t clkAfter, bool isSH1106)
     : Adafruit_GFX(w, h), spi(NULL), wire(twi ? twi : &Wire), buffer(NULL),
       mosiPin(-1), clkPin(-1), dcPin(-1), csPin(-1), rstPin(rst_pin)
 #if ARDUINO >= 157
       ,
       wireClk(clkDuring), restoreClk(clkAfter)
 #endif
+      , isSH1106(isSH1106)
 {
 }
 
@@ -203,16 +206,18 @@ Adafruit_SSD1306::Adafruit_SSD1306(uint8_t w, uint8_t h, TwoWire *twi,
     @param  cs_pin
             Chip-select pin (using Arduino pin numbering) for sharing the
             bus with other devices. Active low.
+    @param  isSH1106
+            The device is actually the clone SH1106,.
     @return Adafruit_SSD1306 object.
     @note   Call the object's begin() function before use -- buffer
             allocation is performed there!
 */
 Adafruit_SSD1306::Adafruit_SSD1306(uint8_t w, uint8_t h, int8_t mosi_pin,
                                    int8_t sclk_pin, int8_t dc_pin,
-                                   int8_t rst_pin, int8_t cs_pin)
+                                   int8_t rst_pin, int8_t cs_pin, bool isSH1106)
     : Adafruit_GFX(w, h), spi(NULL), wire(NULL), buffer(NULL),
       mosiPin(mosi_pin), clkPin(sclk_pin), dcPin(dc_pin), csPin(cs_pin),
-      rstPin(rst_pin) {}
+      rstPin(rst_pin), isSH1106(isSH1106) {}
 
 /*!
     @brief  Constructor for SPI SSD1306 displays, using native hardware SPI.
@@ -236,15 +241,17 @@ Adafruit_SSD1306::Adafruit_SSD1306(uint8_t w, uint8_t h, int8_t mosi_pin,
     @param  bitrate
             SPI clock rate for transfers to this display. Default if
             unspecified is 8000000UL (8 MHz).
+    @param  isSH1106
+            The device is actually the clone SH1106,.
     @return Adafruit_SSD1306 object.
     @note   Call the object's begin() function before use -- buffer
             allocation is performed there!
 */
 Adafruit_SSD1306::Adafruit_SSD1306(uint8_t w, uint8_t h, SPIClass *spi,
                                    int8_t dc_pin, int8_t rst_pin, int8_t cs_pin,
-                                   uint32_t bitrate)
+                                   uint32_t bitrate, bool isSH1106)
     : Adafruit_GFX(w, h), spi(spi ? spi : &SPI), wire(NULL), buffer(NULL),
-      mosiPin(-1), clkPin(-1), dcPin(dc_pin), csPin(cs_pin), rstPin(rst_pin) {
+      mosiPin(-1), clkPin(-1), dcPin(dc_pin), csPin(cs_pin), rstPin(rst_pin), isSH1106(isSH1106) {
 #ifdef SPI_HAS_TRANSACTION
   spiSettings = SPISettings(bitrate, MSBFIRST, SPI_MODE0);
 #endif
@@ -990,44 +997,107 @@ uint8_t *Adafruit_SSD1306::getBuffer(void) { return buffer; }
 */
 void Adafruit_SSD1306::display(void) {
   TRANSACTION_START
-  static const uint8_t PROGMEM dlist1[] = {
-      SSD1306_PAGEADDR,
-      0,                      // Page start address
-      0xFF,                   // Page end (not really, but works here)
-      SSD1306_COLUMNADDR, 0}; // Column start address
-  ssd1306_commandList(dlist1, sizeof(dlist1));
-  ssd1306_command1(WIDTH - 1); // Column end address
+  if (!isSH1106) {
+    static const uint8_t PROGMEM dlist1[] = {
+        SSD1306_PAGEADDR,
+        0,                      // Page start address
+        0xFF,                   // Page end (not really, but works here)
+        SSD1306_COLUMNADDR, 0}; // Column start address
+    ssd1306_commandList(dlist1, sizeof(dlist1));
+    ssd1306_command1(WIDTH - 1); // Column end address
 
-#if defined(ESP8266)
-  // ESP8266 needs a periodic yield() call to avoid watchdog reset.
-  // With the limited size of SSD1306 displays, and the fast bitrate
-  // being used (1 MHz or more), I think one yield() immediately before
-  // a screen write and one immediately after should cover it.  But if
-  // not, if this becomes a problem, yields() might be added in the
-  // 32-byte transfer condition below.
-  yield();
-#endif
-  uint16_t count = WIDTH * ((HEIGHT + 7) / 8);
-  uint8_t *ptr = buffer;
-  if (wire) { // I2C
-    wire->beginTransmission(i2caddr);
-    WIRE_WRITE((uint8_t)0x40);
-    uint16_t bytesOut = 1;
-    while (count--) {
-      if (bytesOut >= WIRE_MAX) {
-        wire->endTransmission();
-        wire->beginTransmission(i2caddr);
-        WIRE_WRITE((uint8_t)0x40);
-        bytesOut = 1;
+  #if defined(ESP8266)
+    // ESP8266 needs a periodic yield() call to avoid watchdog reset.
+    // With the limited size of SSD1306 displays, and the fast bitrate
+    // being used (1 MHz or more), I think one yield() immediately before
+    // a screen write and one immediately after should cover it.  But if
+    // not, if this becomes a problem, yields() might be added in the
+    // 32-byte transfer condition below.
+    yield();
+  #endif
+    uint16_t count = WIDTH * ((HEIGHT + 7) / 8);
+    uint8_t *ptr = buffer;
+    if (wire) { // I2C
+      wire->beginTransmission(i2caddr);
+      WIRE_WRITE((uint8_t)0x40);
+      uint16_t bytesOut = 1;
+      while (count--) {
+        if (bytesOut >= WIRE_MAX) {
+          wire->endTransmission();
+          wire->beginTransmission(i2caddr);
+          WIRE_WRITE((uint8_t)0x40);
+          bytesOut = 1;
+        }
+        WIRE_WRITE(*ptr++);
+        bytesOut++;
       }
-      WIRE_WRITE(*ptr++);
-      bytesOut++;
+      wire->endTransmission();
+    } else { // SPI
+      SSD1306_MODE_DATA
+      while (count--)
+        SPIwrite(*ptr++);
     }
-    wire->endTransmission();
-  } else { // SPI
-    SSD1306_MODE_DATA
-    while (count--)
-      SPIwrite(*ptr++);
+  } else {
+    // The SH1106 seems not to support the SSD1306_MEMORYMODE command.
+    // It's always in a mode equivalent to the SSD1306's "Page Addressing Mode",
+    // so we need to manually set the page start address every time we cross
+    // a page boundary in this transfer loop.
+    static const uint8_t PROGMEM initCommands[] = {
+        SSD1306_SETLOWCOLUMN,   // low column = 0
+        SSD1306_SETHIGHCOLUMN,  // high column = 0
+        SSD1306_SETSTARTLINE    // line = 0
+        };
+    ssd1306_commandList(initCommands, sizeof(initCommands));
+
+    uint8_t pageCommands[3];
+
+  #if defined(ESP8266)
+    // ESP8266 needs a periodic yield() call to avoid watchdog reset.
+    // With the limited size of SSD1306 displays, and the fast bitrate
+    // being used (1 MHz or more), I think one yield() immediately before
+    // a screen write and one immediately after should cover it.  But if
+    // not, if this becomes a problem, yields() might be added in the
+    // 32-byte transfer condition below.
+    yield();
+  #endif
+    uint8_t width = WIDTH >> 3;
+    uint8_t pages = HEIGHT >> 3;
+    
+    uint8_t *ptr = buffer;
+    for (int i = 0; i < pages; i++) {
+
+      pageCommands[0] = SSD1306_PAGESTART | (i);
+      pageCommands[1] = SSD1306_SETLOWCOLUMN | (2);
+      pageCommands[2] = SSD1306_SETHIGHCOLUMN | (0);
+      ssd1306_commandList(pageCommands, sizeof(pageCommands));
+
+      if (wire) { // I2C
+        for (int j = 0; j < 8; j++) {
+
+          wire->beginTransmission(i2caddr);
+          WIRE_WRITE((uint8_t)0x40);
+          uint16_t bytesOut = 1;
+          for (int k = 0; k < width; k++) {
+            if (bytesOut >= WIRE_MAX) {
+              wire->endTransmission();
+              wire->beginTransmission(i2caddr);
+              WIRE_WRITE((uint8_t)0x40);
+              bytesOut = 1;
+            }
+            WIRE_WRITE(*ptr++);
+            bytesOut++;
+          }
+          wire->endTransmission();
+        }
+      } else { // SPI
+        SSD1306_MODE_DATA
+        for (int j = 0; j < 8; j++) {
+          for (int k = 0; k < width; k++) {
+            SPIwrite(*ptr++);
+          }
+        }
+      }
+    }
   }
   TRANSACTION_END
 #if defined(ESP8266)
